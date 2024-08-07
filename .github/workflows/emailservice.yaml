@@ -1,3 +1,4 @@
+# https://github.com/actions/setup-python/issues/519
 name: python lang
 
 env:
@@ -21,31 +22,15 @@ jobs:
         uses: actions/checkout@v4
 
   setup-python:
-    name: Setup Python and Install Dependencies
+    name: Python
     runs-on: self-hosted
     needs: checkout
+    container: python:3.12-slim
     steps:
-      - name: setup python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip' # caching pip dependencies
-
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: Generate gRPC Code
-        run: |
-          bash genproto.sh
-      
-      - name: run tests
-        run: |
-          pytest
-      
-      - name: build or package your application
-        run: |
-          python setup.py sdist bdist_wheel
 
   trivy-fs-scan:
     runs-on: self-hosted
