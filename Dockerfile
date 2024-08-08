@@ -9,6 +9,10 @@ RUN pip install -r requirements.txt
 
 FROM base
 
+ENV PYTHONUNBUFFERED=1
+
+ENV DISABLE_PROFILER=1
+
 WORKDIR /app
 
 # Grab packages from builder
