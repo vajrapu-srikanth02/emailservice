@@ -95,3 +95,20 @@ jobs:
         run: |
             docker push srikanthhg/$APP_NAME:${{ github.sha }}
 
+  update-image-tag-in-helm:
+    runs-on: ubuntu-latest
+    needs: docker-login-push-image
+    steps:
+      - run: |
+          git config --global user.email ci-bot@argocd.com && git config --global user.name ci-bot
+          echo "cloning app repo"
+          git clone --no-checkout  https://oauth2:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/kubernetes-argocd.git
+          cd kubernetes-argocd
+          git sparse-checkout set --cone
+          git sparse-checkout set $APP_NAME
+          echo "checkout source branch"
+          git checkout main
+          echo "updating image version in values file"
+          sed -i "s,imageVersion:.*,imageVersion:\ ${{ github.sha }}," $APP_NAME/values.yaml
+          git add . && git commit -m "update image version"
+          git push
