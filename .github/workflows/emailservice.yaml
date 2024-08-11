@@ -1,5 +1,5 @@
 # https://github.com/actions/setup-python/issues/519
-name: python lang
+name: python lang CI
 
 env:
   APP_NAME: emailservice
