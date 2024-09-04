@@ -1,0 +1,120 @@
+image: alpine:3.19.3
+  
+stages:
+  - build
+  - sonarscan
+  - dependency-check
+  - trivyfsscan
+  - imagebuild
+  - imagescan
+  - imagetagupdate
+
+default:
+  tags:
+    - myec2runner
+    
+variables:
+  DOCKER_HOST: tcp://docker:2376
+  DOCKER_TLS_CERTDIR: "/certs"
+  #SONAR_HOST_URL: "http://3.86.180.187:9000/"
+
+build-job:
+  image: python:3.12.2-slim
+  stage: build
+  script:
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+
+sonarscan-job:
+  needs: [build-job]
+  stage: sonarscan
+  tags:
+    - myrunner
+  image: 
+    name: sonarsource/sonar-scanner-cli:11
+    entrypoint: [""]
+  script:
+    - sonar-scanner -X -Dsonar.login=$SONAR_TOKEN -Dsonar.projectKey=$CI_PROJECT_NAME -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+  
+dependency-check-job:
+  needs: [sonarscan-job]
+  stage: dependency-check
+  image: 
+    name: snyk/snyk:python-3.12
+    entrypoint: [""]
+  before_script:
+    - pip install -r requirements.txt
+  script: 
+    - snyk --version
+    - snyk auth $SNYK_TOKEN
+    #- snyk test
+    - snyk monitor --command=python3 --org=vajrapu-srikanth02 #--skip-unresolved
+
+scanfs-job:
+  needs: [dependency-check-job]
+  stage: trivyfsscan
+  image: 
+    name: aquasec/trivy:0.54.1
+    entrypoint: [""]
+  script:
+    - trivy fs --format table -o fs.html .
+  artifacts:
+    when: always
+    reports:
+      container_scanning: fs.html
+
+imagebuild-job:
+  stage: imagebuild
+  needs: [scanfs-job]
+  image: 
+    name: docker:27.2.0-rc.1-dind-alpine3.20
+  services:
+    - docker:27.2.0-rc.1-dind
+  before_script:
+    -  docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build -t $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:$CI_COMMIT_SHA .
+    - docker push $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:$CI_COMMIT_SHA
+#$CI_PROJECT_NAME: frontend1
+#$CI_PROJECT_NAMESPACE: myproject9993333
+scanimage-job:
+  stage: imagescan
+  needs: [imagebuild-job]
+  image: 
+    name: docker:27.2.0-rc.1-dind-alpine3.20
+  services:
+    - docker:27.2.0-rc.1-dind
+  before_script:
+    - export TRIVY_VERSION=$(wget -qO - "https://api.github.com/repos/aquasecurity/trivy/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+    - echo $TRIVY_VERSION
+    - wget --no-verbose https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -O - | tar -zxvf -
+    - ./trivy --version
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+      # Build report
+    - ./trivy image --cache-dir .trivycache/ --format template --template "@contrib/gitlab.tpl" -o gl-container-scanning-report.html $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:$CI_COMMIT_SHA
+  artifacts:
+    when: always
+    reports:
+      container_scanning: gl-container-scanning-report.html
+
+update-image-tag-in-helm:
+  stage: imagetagupdate
+  needs: [scanimage-job]
+  image: bitnami/git:latest
+  script:  
+    - git config --global user.email "skanth306@gmail.com"
+    - git config --global user.name "srikanthhg"
+    - echo "Cloning app repo"
+    #- git clone --no-checkout https://$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD@gitlab.com/$CI_PROJECT_NAMESPACE/kubernetes-argocd.git
+    - git clone --no-checkout https://oauth2:$CI_REGISTRY_PASSWORD@gitlab.com/$CI_PROJECT_NAMESPACE/kubernetes-argocd.git
+    - cd kubernetes-argocd
+    - git sparse-checkout init --cone
+    - git sparse-checkout set $CI_PROJECT_NAME
+    - echo "Checking out source branch"
+    - git checkout main
+    - echo "updating image version in values file"
+    - sed -i "s,imageVersion:.*,imageVersion:\ $CI_COMMIT_SHA," $CI_PROJECT_NAME/values.yaml
+    - git add .
+    - git commit -m "Update image version to $CI_COMMIT_SHA"
+    - git push
